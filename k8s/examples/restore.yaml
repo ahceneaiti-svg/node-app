@@ -1,0 +1,10 @@
+# Restauration depuis un backup : kubectl apply -f k8s/examples/restore.yaml
+apiVersion: mysql.ahceneaiti.dev/v1alpha1
+kind: MySQLRestore
+metadata:
+  name: restore-manuel-1
+  namespace: users-app
+spec:
+  clusterName: mysql
+  backupName: backup-manuel-1
+  # ou, pour un backup planifié : file: scheduled-20261007-020000.sql.gz

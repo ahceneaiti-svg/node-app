@@ -1,0 +1,50 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mysql-operator
+  namespace: users-app
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: mysql-operator
+  namespace: users-app
+rules:
+  - apiGroups: [mysql.ahceneaiti.dev]
+    resources: [mysqlclusters, mysqlbackups, mysqlrestores]
+    verbs: [get, list]
+  - apiGroups: [mysql.ahceneaiti.dev]
+    resources: [mysqlclusters/status, mysqlbackups/status, mysqlrestores/status]
+    verbs: [get, patch, update]
+  - apiGroups: [""]
+    resources: [services, persistentvolumeclaims]
+    verbs: [get, list, create, patch]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, patch]
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get]
+  - apiGroups: [apps]
+    resources: [statefulsets]
+    verbs: [get, list, create, patch]
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get, list, create, patch]
+  - apiGroups: [batch]
+    resources: [cronjobs]
+    verbs: [get, list, create, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: mysql-operator
+  namespace: users-app
+subjects:
+  - kind: ServiceAccount
+    name: mysql-operator
+    namespace: users-app
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: mysql-operator

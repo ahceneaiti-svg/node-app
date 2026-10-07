@@ -1,0 +1,8 @@
+# Sauvegarde ponctuelle : kubectl apply -f k8s/examples/backup.yaml
+apiVersion: mysql.ahceneaiti.dev/v1alpha1
+kind: MySQLBackup
+metadata:
+  name: backup-manuel-1
+  namespace: users-app
+spec:
+  clusterName: mysql

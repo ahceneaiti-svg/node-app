@@ -1,0 +1,146 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: mysqlclusters.mysql.ahceneaiti.dev
+spec:
+  group: mysql.ahceneaiti.dev
+  scope: Namespaced
+  names:
+    kind: MySQLCluster
+    plural: mysqlclusters
+    singular: mysqlcluster
+    shortNames: [mc]
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - { name: Phase, type: string, jsonPath: .status.phase }
+        - { name: Primary, type: string, jsonPath: .status.primary }
+        - { name: Replicas, type: integer, jsonPath: .spec.replicas }
+        - { name: Ready-Replicas, type: integer, jsonPath: .status.readyReplicas }
+        - { name: Age, type: date, jsonPath: .metadata.creationTimestamp }
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                replicas:
+                  type: integer
+                  minimum: 0
+                  maximum: 5
+                  default: 1
+                  description: Nombre de réplicas (slaves) en plus du primaire.
+                image:
+                  type: string
+                  default: mysql:8.4
+                secretName:
+                  type: string
+                  default: mysql-secret
+                  description: "Secret contenant MYSQL_ROOT_PASSWORD, MYSQL_REPLICATION_PASSWORD, MYSQL_DATABASE, MYSQL_USER, MYSQL_PASSWORD."
+                storage:
+                  type: string
+                  default: 1Gi
+                  description: Taille du volume de chaque instance.
+                backup:
+                  type: object
+                  properties:
+                    schedule:
+                      type: string
+                      description: Cron des sauvegardes planifiées (ex. "0 2 * * *"). Vide = désactivé.
+                    retention:
+                      type: integer
+                      minimum: 1
+                      default: 7
+                      description: Nombre de sauvegardes planifiées conservées.
+                    storage:
+                      type: string
+                      default: 2Gi
+                      description: Taille du volume de sauvegardes.
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: mysqlbackups.mysql.ahceneaiti.dev
+spec:
+  group: mysql.ahceneaiti.dev
+  scope: Namespaced
+  names:
+    kind: MySQLBackup
+    plural: mysqlbackups
+    singular: mysqlbackup
+    shortNames: [mb]
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - { name: Cluster, type: string, jsonPath: .spec.clusterName }
+        - { name: Phase, type: string, jsonPath: .status.phase }
+        - { name: File, type: string, jsonPath: .status.file }
+        - { name: Age, type: date, jsonPath: .metadata.creationTimestamp }
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [clusterName]
+              properties:
+                clusterName:
+                  type: string
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: mysqlrestores.mysql.ahceneaiti.dev
+spec:
+  group: mysql.ahceneaiti.dev
+  scope: Namespaced
+  names:
+    kind: MySQLRestore
+    plural: mysqlrestores
+    singular: mysqlrestore
+    shortNames: [mr]
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - { name: Cluster, type: string, jsonPath: .spec.clusterName }
+        - { name: Phase, type: string, jsonPath: .status.phase }
+        - { name: File, type: string, jsonPath: .status.file }
+        - { name: Age, type: date, jsonPath: .metadata.creationTimestamp }
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [clusterName]
+              properties:
+                clusterName:
+                  type: string
+                backupName:
+                  type: string
+                  description: Nom d'un MySQLBackup terminé.
+                file:
+                  type: string
+                  description: Nom d'un fichier du volume de backups (ex. scheduled-20261007-020000.sql.gz). Alternative à backupName.
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true

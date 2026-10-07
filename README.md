@@ -15,8 +15,13 @@ API REST Node.js (Express) stockant des utilisateurs dans MySQL. Image Docker : 
 │   ├── kind-config.yaml  # cluster kind (port 8080 -> NodePort 30080)
 │   ├── namespace.yaml
 │   ├── secret.yaml       # identifiants MySQL (démo)
-│   ├── mysql.yaml        # StatefulSet + PVC + Service
+│   ├── mysql-cluster.yaml # MySQLCluster (primaire + réplica, backups)
+│   ├── seed-job.yaml     # génération de données
+│   ├── examples/         # MySQLBackup / MySQLRestore
+│   ├── README.md         # guide de déploiement détaillé
 │   └── back-node.yaml    # Deployment (2 replicas) + Service NodePort
+├── operator/           # opérateur Kubernetes MySQL (réplication, backup, restore)
+│   └── README.md       # documentation de l'opérateur
 └── docs/API.md         # référence de l'API
 ```
 
@@ -62,14 +67,21 @@ docker push ahceneaiti/back-node:1.0
 # 1. cluster (expose localhost:8080)
 kind create cluster --name users --config k8s/kind-config.yaml
 
-# 2. déploiement
-kubectl apply -f k8s/namespace.yaml -f k8s/secret.yaml \
-              -f k8s/mysql.yaml -f k8s/back-node.yaml
+# 2. opérateur MySQL (image locale chargée dans kind)
+docker build -t ahceneaiti/mysql-operator:1.0 operator
+kind load docker-image ahceneaiti/mysql-operator:1.0 --name users
+kubectl apply -f operator/deploy/crds.yaml -f k8s/namespace.yaml
+kubectl apply -f operator/deploy/rbac.yaml -f operator/deploy/operator.yaml
 
-# 3. attendre que tout soit prêt
+# 3. cluster MySQL (primaire + réplica) puis API
+kubectl apply -f k8s/secret.yaml -f k8s/mysql-cluster.yaml
+kubectl -n users-app wait --for=jsonpath='{.status.phase}'=Ready mysqlcluster/mysql --timeout=300s
+kubectl apply -f k8s/back-node.yaml
+
+# 4. attendre que tout soit prêt
 kubectl -n users-app get pods -w
 
-# 4. test
+# 5. test
 curl http://localhost:8080/health
 curl -X POST http://localhost:8080/users \
   -H 'Content-Type: application/json' \
@@ -81,7 +93,7 @@ Le cluster tire l'image depuis Docker Hub. Pour tester une image locale non pous
 
 ### Architecture
 
-- `mysql` : StatefulSet 1 replica, volume persistant 1 Gi, Service interne `mysql:3306`.
+- `mysql` : `MySQLCluster` géré par l'opérateur : primaire `mysql-0` + réplica `mysql-1` (réplication GTID), Services `mysql` (écritures) et `mysql-read` (lectures), backups et restore via CR. Voir `operator/README.md`.
 - `back-node` : Deployment 2 replicas, `initContainer` qui attend MySQL, probes sur `/health`, Service NodePort `30080` mappé sur `localhost:8080`.
 - Identifiants MySQL dans le Secret `mysql-secret`.
 

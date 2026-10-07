@@ -1,0 +1,16 @@
+# Cluster MySQL géré par l'opérateur : 1 primaire (mysql-0) + 1 réplica (mysql-1).
+# Services créés : mysql (primaire, écritures), mysql-read (réplicas, lectures).
+apiVersion: mysql.ahceneaiti.dev/v1alpha1
+kind: MySQLCluster
+metadata:
+  name: mysql
+  namespace: users-app
+spec:
+  replicas: 1
+  image: mysql:8.4
+  secretName: mysql-secret
+  storage: 1Gi
+  backup:
+    schedule: "0 2 * * *"   # tous les jours à 02:00
+    retention: 7
+    storage: 2Gi
