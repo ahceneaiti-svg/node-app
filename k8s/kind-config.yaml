@@ -1,0 +1,8 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30080   # NodePort du service back-node
+        hostPort: 8080         # accessible sur http://localhost:8080
+        protocol: TCP
