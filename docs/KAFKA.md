@@ -65,38 +65,147 @@ Si l'UI n'est pas joignable (cluster créé sans le mapping kind) : `kubectl -n 
 
 ## Exploiter en ligne de commande
 
-Les outils sont dans le pod `kafka-0` :
+Les outils Kafka sont dans le pod `kafka-0` (`/opt/kafka/bin`). Le broker écoute sur `localhost:9092` depuis ce pod.
 
 ```bash
-K="kubectl -n users-app exec kafka-0 --"
-B=/opt/kafka/bin
-
-# topics
-$K $B/kafka-topics.sh --bootstrap-server localhost:9092 --list
-$K $B/kafka-topics.sh --bootstrap-server localhost:9092 --describe --topic user-created
-$K $B/kafka-topics.sh --bootstrap-server localhost:9092 --create --topic autre --partitions 3
-
-# lire les messages
-$K $B/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic user-created --from-beginning --timeout-ms 5000
-
-# publier un événement à la main (déclenche un mail)
-echo '{"id":99,"name":"Test","email":"test@example.com"}' | \
-  kubectl -n users-app exec -i kafka-0 -- $B/kafka-console-producer.sh --bootstrap-server localhost:9092 --topic user-created
-
-# groupes de consumers et lag
-$K $B/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --list
-$K $B/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group notifier
+# raccourci : kk <outil.sh> <arguments...>
+kk() { local t=$1; shift; kubectl -n users-app exec -i kafka-0 -- /opt/kafka/bin/$t --bootstrap-server localhost:9092 "$@"; }
 ```
+
+Toutes les commandes ci-dessous utilisent `kk`. Sans le raccourci : `kubectl -n users-app exec -i kafka-0 -- /opt/kafka/bin/<outil>.sh --bootstrap-server localhost:9092 ...`.
+
+### Topics
+
+```bash
+kk kafka-topics.sh --list
+kk kafka-topics.sh --describe --topic user-created        # partitions, leader, réplicas, ISR
+kk kafka-topics.sh --describe --under-replicated-partitions
+
+kk kafka-topics.sh --create --topic autre --partitions 3 --replication-factor 1
+kk kafka-topics.sh --alter --topic autre --partitions 6   # augmenter seulement, jamais réduire
+kk kafka-topics.sh --delete --topic autre
+```
+
+Attention : augmenter les partitions change le routage des clés (même `id` → autre partition) pour les futurs messages.
+
+### Lire les messages
+
+```bash
+# tout le topic (s'arrête après 5 s sans nouveau message)
+kk kafka-console-consumer.sh --topic user-created --from-beginning --timeout-ms 5000
+
+# avec clé, partition, offset et horodatage
+kk kafka-console-consumer.sh --topic user-created --from-beginning --timeout-ms 5000 \
+  --property print.key=true --property print.partition=true \
+  --property print.offset=true --property print.timestamp=true
+
+# une partition à partir d'un offset, 10 messages max
+kk kafka-console-consumer.sh --topic user-created --partition 0 --offset 5 --max-messages 10
+
+# suivre en direct (Ctrl+C pour quitter)
+kk kafka-console-consumer.sh --topic user-created
+
+# lecture sans toucher au groupe `notifier` : ne pas passer --group (groupe temporaire créé)
+```
+
+Mettre en forme le JSON (nécessite `jq` sur la machine hôte) :
+
+```bash
+kk kafka-console-consumer.sh --topic user-created --from-beginning --timeout-ms 5000 | jq .
+```
+
+### Publier un événement
+
+Chaque ligne est un message. Un message valide déclenche un mail via le `notifier`.
+
+```bash
+echo '{"id":99,"name":"Test","email":"test@example.com"}' | kk kafka-console-producer.sh --topic user-created
+
+# avec une clé (même clé = même partition)
+echo '99:{"id":99,"name":"Test","email":"test@example.com"}' | \
+  kk kafka-console-producer.sh --topic user-created --property parse.key=true --property key.separator=:
+```
+
+Un message invalide (JSON cassé, `email` absent) est ignoré et loggué par le `notifier`, sans bloquer la suite.
+
+### Offsets et taille des topics
+
+```bash
+# nombre de messages par partition (--time -1 = fin, -2 = début) ; messages = fin - début
+kk kafka-get-offsets.sh --topic user-created --time -1
+kk kafka-get-offsets.sh --topic user-created --time -2
+
+# espace disque par topic/partition
+kk kafka-log-dirs.sh --describe --topic-list user-created
+```
+
+### Groupes de consumers
+
+```bash
+kk kafka-consumer-groups.sh --list
+kk kafka-consumer-groups.sh --describe --group notifier   # CURRENT-OFFSET, LOG-END-OFFSET, LAG par partition
+kk kafka-consumer-groups.sh --describe --group notifier --members --verbose
+kk kafka-consumer-groups.sh --describe --group notifier --state
+```
+
+Un `LAG` qui reste supérieur à 0 signifie que le `notifier` n'a pas fini de traiter les messages.
+
+**Repositionner le groupe** (le `notifier` doit être arrêté : `kubectl -n users-app scale deploy/notifier --replicas=0`). Toujours lancer d'abord avec `--dry-run`, puis `--execute`.
+
+```bash
+G="--group notifier --topic user-created"
+kk kafka-consumer-groups.sh --reset-offsets $G --to-earliest --dry-run   # rejoue tout (un mail par message !)
+kk kafka-consumer-groups.sh --reset-offsets $G --to-latest   --execute   # ignore les messages en attente
+kk kafka-consumer-groups.sh --reset-offsets $G --shift-by -3  --execute  # recule de 3 par partition
+kk kafka-consumer-groups.sh --reset-offsets $G --to-datetime 2026-10-12T08:00:00.000 --execute
+kk kafka-consumer-groups.sh --delete --group notifier                    # supprime le groupe (offsets perdus)
+```
+
+Puis `kubectl -n users-app scale deploy/notifier --replicas=1`.
+
+### Configuration
+
+```bash
+# configuration d'un topic
+kk kafka-configs.sh --describe --entity-type topics --entity-name user-created
+kk kafka-configs.sh --alter --entity-type topics --entity-name user-created --add-config retention.ms=86400000   # 1 jour
+kk kafka-configs.sh --alter --entity-type topics --entity-name user-created --delete-config retention.ms
+
+# configuration du broker (id 1)
+kk kafka-configs.sh --describe --entity-type brokers --entity-name 1 --all
+```
+
+### État du cluster
+
+```bash
+kk kafka-broker-api-versions.sh | head -1                    # broker joignable + version
+kubectl -n users-app exec kafka-0 -- /opt/kafka/bin/kafka-metadata-quorum.sh \
+  --bootstrap-server localhost:9092 describe --status        # contrôleur KRaft, leader, epoch
+```
+
+### Test de charge
+
+```bash
+kk kafka-producer-perf-test.sh --topic perf --num-records 10000 --record-size 200 \
+  --throughput -1 --producer-props bootstrap.servers=localhost:9092
+kk kafka-topics.sh --delete --topic perf
+```
+
+Ne pas utiliser `user-created` pour ce test : le `notifier` enverrait des milliers de mails (illisibles et rejetés).
+
+### Depuis la machine hôte (sans `exec`)
+
+Le broker annonce son adresse interne (`kafka-0.kafka-headless...`) : un client hors cluster ne peut pas s'y connecter directement. Pour un accès hôte, utiliser Kafka UI ou `kubectl exec` comme ci-dessus.
 
 ## Opérations courantes
 
 | Besoin | Commande |
 |--------|----------|
 | Logs du broker / du notifier / de l'API | `kubectl -n users-app logs kafka-0` · `deploy/notifier` · `deploy/back-node` |
-| Rejouer tous les mails | supprimer le groupe puis redémarrer : `kubectl -n users-app scale deploy/notifier --replicas=0`, `$K $B/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --delete --group notifier`, `scale --replicas=1` (renvoie un mail par message conservé !) |
-| Sauter les messages en attente | `kafka-consumer-groups.sh ... --group notifier --topic user-created --reset-offsets --to-latest --execute` (notifier à l'arrêt) |
+| Rejouer tous les mails | arrêter le `notifier` puis `--reset-offsets --to-earliest` (voir *Groupes de consumers*) ; renvoie un mail par message conservé |
+| Sauter les messages en attente | `--reset-offsets --to-latest --execute` (notifier à l'arrêt) |
 | Paralléliser l'envoi | `kubectl -n users-app scale deploy/notifier --replicas=3` (max = nombre de partitions) |
-| Rétention des messages | défaut 7 jours : `kafka-configs.sh --bootstrap-server localhost:9092 --alter --entity-type topics --entity-name user-created --add-config retention.ms=86400000` |
+| Rétention des messages | défaut 7 jours, modifiable avec `retention.ms` (voir *Configuration*) |
 | Redémarrer Kafka | `kubectl -n users-app rollout restart sts/kafka` (données conservées sur le PVC `data-kafka-0`) |
 | Tout effacer | `kubectl -n users-app delete sts/kafka pvc/data-kafka-0` |
 
