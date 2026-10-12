@@ -53,6 +53,40 @@ curl -X POST localhost:8080/users -H 'Content-Type: application/json' \
 
 Puis ouvrir http://localhost:8025 (mail reçu) et http://localhost:8090 → *Topics* → `user-created` → *Messages*.
 
+## Comprendre les offsets
+
+Un **offset** est la position d'un message dans une partition : un entier qui commence à 0 et croît de 1 à chaque message écrit. Il ne change jamais pour un message donné. Il est propre à chaque partition : `user-created` (3 partitions) a trois séquences indépendantes, et un message se repère par `(topic, partition, offset)`.
+
+| Offset | Où | Qui le fixe |
+|--------|----|-------------|
+| Offset du message | log de la partition | le broker, à l'écriture |
+| *log start offset* / *log end offset* (LEO) | premier offset conservé / prochain offset à écrire | le broker (le start avance quand la rétention supprime les vieux messages) |
+| *current offset* d'un groupe | prochain offset à lire par le groupe, stocké dans le topic interne `__consumer_offsets` | le consumer, en commitant |
+
+**Incrémentation**
+
+- Le producer écrit un message : le LEO de la partition passe de N à N+1 (automatique, jamais en arrière).
+- Le consumer traite puis commite : le *current offset* du groupe devient « dernier offset traité + 1 ». Dans le `notifier`, le commit a lieu après le retour de `eachMessage`, donc après l'envoi du mail.
+- **Lag** = LEO − *current offset*. À 0, tout est consommé.
+- Chaque groupe a ses propres offsets : `notifier` et un autre groupe lisent indépendamment le même topic.
+
+**Remise à zéro** : jamais automatique.
+
+- Les offsets des messages ne repartent pas à 0. La rétention (7 jours par défaut) fait avancer le *log start offset* : une partition peut commencer à l'offset 1500.
+- Seul l'offset d'un groupe se repositionne, par action manuelle (Kafka UI ou CLI, voir ci-dessous).
+- Un groupe sans offset commité démarre selon `fromBeginning` : le `notifier` utilise `true` (il part du début), sinon il partirait de la fin.
+
+### Dans Kafka UI (http://localhost:8090)
+
+| Où | Ce qu'on voit / fait |
+|----|----------------------|
+| *Topics → `user-created` → Overview* | nombre de messages par partition |
+| *Topics → `user-created` → Messages* | offset et partition de chaque message ; filtre par offset, partition ou date |
+| *Consumers → `notifier`* | *current offset*, *end offset* et lag par partition, membres connectés |
+| *Consumers → `notifier` → Reset offsets* | repositionnement : *earliest*, *latest*, *timestamp* ou *offset précis* par partition |
+
+Le reset exige un groupe **sans membre actif** : arrêter d'abord le consumer (`kubectl -n users-app scale deploy/notifier --replicas=0`), faire le reset, puis `--replicas=1`. *earliest* rejoue tous les messages conservés : le `notifier` renvoie un mail par message. En CLI : section *Groupes de consumers* ci-dessous.
+
 ## Exploiter avec Kafka UI
 
 http://localhost:8090 (sans authentification : usage local uniquement).
