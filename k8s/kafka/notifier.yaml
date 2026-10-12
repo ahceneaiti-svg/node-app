@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notifier
+  namespace: users-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: notifier
+  template:
+    metadata:
+      labels:
+        app: notifier
+    spec:
+      initContainers:
+        - name: wait-for-kafka
+          image: busybox:1.37
+          command: ["sh", "-c", "until nc -z kafka 9092; do echo attente kafka; sleep 2; done"]
+      containers:
+        - name: notifier
+          image: ahceneaiti/notifier:1.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - { name: KAFKA_BROKERS, value: "kafka:9092" }
+            - { name: KAFKA_TOPIC_USER_CREATED, value: "user-created" }
+            - { name: KAFKA_GROUP_ID, value: "notifier" }
+            - { name: SMTP_HOST, value: "mailpit" }
+            - { name: SMTP_PORT, value: "1025" }
+            - { name: MAIL_FROM, value: "no-reply@users-app.local" }
+          resources:
+            requests:
+              cpu: 20m
+              memory: 64Mi
+            limits:
+              memory: 192Mi

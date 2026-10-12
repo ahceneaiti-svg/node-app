@@ -4,17 +4,22 @@ Déploie dans le namespace `users-app` d'un cluster [kind](https://kind.sigs.k8s
 
 - l'opérateur `mysql-operator` (voir [`../operator/README.md`](../operator/README.md)) ;
 - un cluster MySQL **primaire + réplica** géré par l'opérateur (réplication, backup, restore) ;
-- l'API `back-node`.
+- l'API `back-node` ;
+- Kafka (KRaft), Kafka UI, Mailpit (SMTP de test) et le consumer `notifier` : un mail est envoyé à chaque utilisateur créé.
 
 ## Fichiers
 
 | Fichier                  | Rôle |
 |--------------------------|------|
-| `kind-config.yaml`       | Cluster kind : mappe `localhost:8080` vers le NodePort `30080` |
+| `kind-config.yaml`       | Cluster kind : mappe `localhost:8080`, `8090`, `8025` vers les NodePorts `30080`, `30090`, `30025` |
 | `namespace.yaml`         | Namespace `users-app` |
 | `secret.yaml`            | Identifiants MySQL, dont `MYSQL_REPLICATION_PASSWORD` (valeurs de démo) |
 | `mysql-cluster.yaml`     | `MySQLCluster` : 1 primaire + 1 réplica, backup planifié quotidien |
-| `back-node.yaml`         | Deployment `ahceneaiti/back-node:1.0` (2 replicas) + Service NodePort `30080` |
+| `back-node.yaml`         | Deployment `ahceneaiti/back-node:1.1` (2 replicas) + Service NodePort `30080` |
+| `kafka/kafka.yaml`       | StatefulSet Kafka 3.9 (KRaft, 1 broker, PVC 2 Gi) + Services `kafka` et `kafka-headless` |
+| `kafka/kafka-ui.yaml`    | Kafka UI + Service NodePort `30090` (`localhost:8090`) |
+| `kafka/mailpit.yaml`     | SMTP de test + UI, NodePort `30025` (`localhost:8025`) |
+| `kafka/notifier.yaml`    | Deployment `ahceneaiti/notifier:1.0` (consumer Kafka → mail) |
 | `seed-job.yaml`          | Job qui génère 20 utilisateurs de test |
 | `examples/backup.yaml`   | Exemple `MySQLBackup` |
 | `examples/restore.yaml`  | Exemple `MySQLRestore` |
@@ -39,6 +44,15 @@ kubectl apply -f operator/deploy/rbac.yaml -f operator/deploy/operator.yaml
 # secret + cluster MySQL
 kubectl apply -f k8s/secret.yaml -f k8s/mysql-cluster.yaml
 kubectl -n users-app wait --for=jsonpath='{.status.phase}'=Ready mysqlcluster/mysql --timeout=300s
+
+# images de l'API et du notifier (construites en local, chargées dans kind)
+docker build -t ahceneaiti/back-node:1.1 back-node
+docker build -t ahceneaiti/notifier:1.0 notifier
+kind load docker-image ahceneaiti/back-node:1.1 ahceneaiti/notifier:1.0 --name users
+
+# Kafka, Kafka UI, Mailpit, notifier
+kubectl apply -f k8s/kafka/
+kubectl -n users-app rollout status sts/kafka
 
 # API
 kubectl apply -f k8s/back-node.yaml
@@ -121,6 +135,28 @@ kubectl -n users-app patch mysqlcluster mysql --type merge -p '{"spec":{"replica
 ```
 
 Le nouveau réplica est configuré et rattrape les données automatiquement. En réduisant, les PVC `data-mysql-N` restent : `kubectl -n users-app delete pvc data-mysql-2` pour les supprimer.
+
+## Kafka et notifications
+
+Détails (architecture, commandes d'exploitation, dépannage) : [`../docs/KAFKA.md`](../docs/KAFKA.md).
+
+| Service | URL | Usage |
+|---------|-----|-------|
+| Kafka UI | http://localhost:8090 | topics, messages, groupes de consumers et lag |
+| Mailpit  | http://localhost:8025 | mails envoyés par le `notifier` |
+| `kafka:9092` | interne au cluster | bootstrap Kafka (non exposé) |
+
+```bash
+# créer un utilisateur : un mail "Bienvenue !" doit apparaître dans Mailpit
+curl -X POST localhost:8080/users -H 'Content-Type: application/json' \
+  -d '{"name":"Alice","email":"alice@example.com"}'
+
+kubectl -n users-app logs deploy/notifier            # "mail envoyé à alice@example.com"
+kubectl -n users-app exec kafka-0 -- /opt/kafka/bin/kafka-consumer-groups.sh \
+  --bootstrap-server localhost:9092 --describe --group notifier    # LAG = 0
+```
+
+Sans le mapping kind (cluster déjà créé) : `kubectl -n users-app port-forward svc/kafka-ui 8090:8080` et `svc/mailpit 8025:8025`. Pour ajouter les ports à un cluster existant, il faut le recréer (`kind delete cluster --name users`).
 
 ## 4. Générer des données
 
@@ -220,6 +256,8 @@ Q "SELECT COUNT(*) FROM users_db.users"                                      # 2
 kubectl -n users-app get all,pvc,mysqlcluster,mysqlbackup,mysqlrestore
 kubectl -n users-app logs deploy/mysql-operator
 kubectl -n users-app logs deploy/back-node
+kubectl -n users-app logs deploy/notifier
+kubectl -n users-app logs kafka-0
 kubectl -n users-app logs mysql-0
 kubectl -n users-app describe pod <pod>
 ```
@@ -228,7 +266,7 @@ kubectl -n users-app describe pod <pod>
 
 ```bash
 # API
-kubectl -n users-app set image deploy/back-node back-node=ahceneaiti/back-node:1.1
+kubectl -n users-app set image deploy/back-node back-node=ahceneaiti/back-node:1.2
 # Opérateur (image locale)
 docker build -t ahceneaiti/mysql-operator:1.0 operator
 kind load docker-image ahceneaiti/mysql-operator:1.0 --name users
@@ -245,4 +283,4 @@ kind delete cluster --name users
 
 ## Sécurité
 
-`secret.yaml` contient des mots de passe de démonstration, publics dans ce repo. À remplacer et ne plus versionner pour tout usage autre que local.
+`secret.yaml` contient des mots de passe de démonstration, publics dans ce repo. À remplacer et ne plus versionner pour tout usage autre que local. Kafka et Kafka UI n'ont aucune authentification : usage local uniquement.

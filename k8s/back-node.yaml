@@ -19,13 +19,17 @@ spec:
           command: ["sh", "-c", "until nc -z mysql 3306; do echo attente mysql; sleep 2; done"]
       containers:
         - name: back-node
-          image: ahceneaiti/back-node:1.0
+          image: ahceneaiti/back-node:1.1
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 3000
           env:
             - name: PORT
               value: "3000"
+            - name: KAFKA_BROKERS
+              value: kafka:9092
+            - name: KAFKA_TOPIC_USER_CREATED
+              value: user-created
             - name: DB_HOST
               value: mysql
             - name: DB_PORT

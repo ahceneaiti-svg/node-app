@@ -1,6 +1,6 @@
 # back-node — API de gestion des utilisateurs
 
-API REST Node.js (Express) stockant des utilisateurs dans MySQL. Image Docker : `ahceneaiti/back-node:1.0`. Déploiement sur cluster local [kind](https://kind.sigs.k8s.io/).
+API REST Node.js (Express) stockant des utilisateurs dans MySQL. Image Docker : `ahceneaiti/back-node:1.1`. Chaque création d'utilisateur déclenche un mail via Kafka (voir [`docs/KAFKA.md`](docs/KAFKA.md)). Déploiement sur cluster local [kind](https://kind.sigs.k8s.io/).
 
 ## Structure
 
@@ -9,20 +9,24 @@ API REST Node.js (Express) stockant des utilisateurs dans MySQL. Image Docker : 
 ├── back-node/          # code de l'API + Dockerfile
 │   ├── src/index.js    # routes Express
 │   ├── src/db.js       # pool MySQL + création de la table
+│   ├── src/kafka.js    # producer Kafka (événement user-created)
 │   ├── Dockerfile
 │   └── package.json
+├── notifier/           # consumer Kafka : envoi du mail de bienvenue (nodemailer)
 ├── k8s/                # manifestes Kubernetes
 │   ├── kind-config.yaml  # cluster kind (port 8080 -> NodePort 30080)
 │   ├── namespace.yaml
 │   ├── secret.yaml       # identifiants MySQL (démo)
 │   ├── mysql-cluster.yaml # MySQLCluster (primaire + réplica, backups)
 │   ├── seed-job.yaml     # génération de données
+│   ├── kafka/            # Kafka (KRaft), Kafka UI, Mailpit, notifier
 │   ├── examples/         # MySQLBackup / MySQLRestore
 │   ├── README.md         # guide de déploiement détaillé
 │   └── back-node.yaml    # Deployment (2 replicas) + Service NodePort
 ├── operator/           # opérateur Kubernetes MySQL (réplication, backup, restore)
 │   └── README.md       # documentation de l'opérateur
-└── docs/API.md         # référence de l'API
+├── docs/API.md         # référence de l'API
+└── docs/KAFKA.md       # Kafka : architecture, déploiement, exploitation
 ```
 
 ## Prérequis
@@ -49,6 +53,8 @@ DB_HOST=127.0.0.1 DB_USER=root DB_PASSWORD=root npm start
 | `DB_USER`     | `root`      | Utilisateur MySQL    |
 | `DB_PASSWORD` | (vide)      | Mot de passe MySQL   |
 | `DB_NAME`     | `users_db`  | Base de données      |
+| `KAFKA_BROKERS` | (vide)    | Brokers Kafka (`host:port,...`). Vide : notifications désactivées |
+| `KAFKA_TOPIC_USER_CREATED` | `user-created` | Topic de l'événement |
 
 La table `users` est créée automatiquement au démarrage. L'API réessaie la connexion MySQL (30 x 2 s).
 
@@ -56,9 +62,9 @@ La table `users` est créée automatiquement au démarrage. L'API réessaie la c
 
 ```bash
 cd back-node
-docker build -t ahceneaiti/back-node:1.0 .
+docker build -t ahceneaiti/back-node:1.1 .
 docker login
-docker push ahceneaiti/back-node:1.0
+docker push ahceneaiti/back-node:1.1
 ```
 
 ## Déploiement sur kind
@@ -76,6 +82,13 @@ kubectl apply -f operator/deploy/rbac.yaml -f operator/deploy/operator.yaml
 # 3. cluster MySQL (primaire + réplica) puis API
 kubectl apply -f k8s/secret.yaml -f k8s/mysql-cluster.yaml
 kubectl -n users-app wait --for=jsonpath='{.status.phase}'=Ready mysqlcluster/mysql --timeout=300s
+
+# 3b. Kafka, Kafka UI, Mailpit, notifier (images locales)
+docker build -t ahceneaiti/back-node:1.1 back-node
+docker build -t ahceneaiti/notifier:1.0 notifier
+kind load docker-image ahceneaiti/back-node:1.1 ahceneaiti/notifier:1.0 --name users
+kubectl apply -f k8s/kafka/
+kubectl -n users-app rollout status sts/kafka
 kubectl apply -f k8s/back-node.yaml
 
 # 4. attendre que tout soit prêt
@@ -89,12 +102,14 @@ curl -X POST http://localhost:8080/users \
 curl http://localhost:8080/users
 ```
 
-Le cluster tire l'image depuis Docker Hub. Pour tester une image locale non poussée : `kind load docker-image ahceneaiti/back-node:1.0 --name users`.
+Les images `back-node:1.1` et `notifier:1.0` ne sont pas sur Docker Hub : les charger avec `kind load` (voir ci-dessus). Pour tester une image locale non poussée : `kind load docker-image ahceneaiti/back-node:1.1 --name users`.
 
 ### Architecture
 
 - `mysql` : `MySQLCluster` géré par l'opérateur : primaire `mysql-0` + réplica `mysql-1` (réplication GTID), Services `mysql` (écritures) et `mysql-read` (lectures), backups et restore via CR. Voir `operator/README.md`.
 - `back-node` : Deployment 2 replicas, `initContainer` qui attend MySQL, probes sur `/health`, Service NodePort `30080` mappé sur `localhost:8080`.
+- `kafka` : broker unique KRaft (StatefulSet + PVC), topic `user-created`. `kafka-ui` exposé sur `localhost:8090`.
+- `notifier` : consomme `user-created` et envoie un mail via SMTP ; `mailpit` capture les mails (`localhost:8025`). Voir `docs/KAFKA.md`.
 - Identifiants MySQL dans le Secret `mysql-secret`.
 
 ### Nettoyage

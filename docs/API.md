@@ -23,6 +23,10 @@ Base URL (kind) : `http://localhost:8080`. Corps et réponses en JSON.
 | PUT     | `/users/:id`  | modification (`name`/`email`)  | 200    |
 | DELETE  | `/users/:id`  | suppression                    | 204    |
 
+## Notification par mail
+
+`POST /users` publie l'événement `user-created` dans Kafka ; le service `notifier` envoie un mail de bienvenue à l'adresse `email`. La publication est asynchrone : l'échec de Kafka n'affecte pas la réponse `201`. Voir [`KAFKA.md`](KAFKA.md).
+
 ## Erreurs
 
 | Code | Cas                                   | Exemple                                |

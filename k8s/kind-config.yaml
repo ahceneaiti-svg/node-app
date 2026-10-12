@@ -6,3 +6,9 @@ nodes:
       - containerPort: 30080   # NodePort du service back-node
         hostPort: 8080         # accessible sur http://localhost:8080
         protocol: TCP
+      - containerPort: 30090   # NodePort de Kafka UI
+        hostPort: 8090         # http://localhost:8090
+        protocol: TCP
+      - containerPort: 30025   # NodePort de Mailpit (mails capturés)
+        hostPort: 8025         # http://localhost:8025
+        protocol: TCP

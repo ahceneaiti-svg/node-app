@@ -1,5 +1,6 @@
 const express = require('express');
 const { pool, init } = require('./db');
+const { connect: connectKafka, publishUserCreated } = require('./kafka');
 
 const app = express();
 app.use(express.json());
@@ -49,6 +50,7 @@ app.post('/users', async (req, res, next) => {
     const { name, email } = req.body;
     const [r] = await pool.query('INSERT INTO users (name, email) VALUES (?, ?)', [name.trim(), email]);
     const [rows] = await pool.query('SELECT * FROM users WHERE id = ?', [r.insertId]);
+    publishUserCreated(rows[0]);
     res.status(201).json(rows[0]);
   } catch (e) { next(e); }
 });
@@ -85,5 +87,8 @@ app.use((err, _req, res, _next) => {
 
 const port = Number(process.env.PORT || 3000);
 init()
-  .then(() => app.listen(port, () => console.log(`API sur :${port}`)))
+  .then(() => {
+    connectKafka();
+    app.listen(port, () => console.log(`API sur :${port}`));
+  })
   .catch((e) => { console.error(e.message); process.exit(1); });

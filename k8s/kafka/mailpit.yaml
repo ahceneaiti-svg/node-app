@@ -1,0 +1,46 @@
+# Serveur SMTP de test : capture les mails sans les envoyer. Interface web sur :8025.
+# En production, remplacer par un vrai SMTP via SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASSWORD du notifier.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mailpit
+  namespace: users-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mailpit
+  template:
+    metadata:
+      labels:
+        app: mailpit
+    spec:
+      containers:
+        - name: mailpit
+          image: axllent/mailpit:v1.21
+          ports:
+            - { name: smtp, containerPort: 1025 }
+            - { name: http, containerPort: 8025 }
+          readinessProbe:
+            httpGet:
+              path: /livez
+              port: 8025
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mailpit
+  namespace: users-app
+spec:
+  type: NodePort
+  selector:
+    app: mailpit
+  ports:
+    - { name: smtp, port: 1025, targetPort: 1025 }
+    - { name: http, port: 8025, targetPort: 8025, nodePort: 30025 }
